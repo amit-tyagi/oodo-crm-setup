@@ -136,7 +136,7 @@ Resources:
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
+          AssignPublicIp: ENABLED
           Subnets: !Ref PrivateSubnetIds
           SecurityGroups:
             - !ImportValue OdooEcsSgId

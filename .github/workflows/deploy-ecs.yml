@@ -58,6 +58,21 @@ jobs:
           echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
           echo "Built and pushed: $IMAGE_URI"
 
+      - name: Delete stack if in ROLLBACK_COMPLETE
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-ecs \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Stack is in ROLLBACK_COMPLETE — deleting before redeploy..."
+            aws cloudformation delete-stack --stack-name odoo-ecs
+            aws cloudformation wait stack-delete-complete --stack-name odoo-ecs
+            echo "Stack deleted."
+          else
+            echo "Stack status: $STATUS — no deletion needed."
+          fi
+
       - name: Deploy odoo-ecs stack
         run: |
           aws cloudformation deploy \
