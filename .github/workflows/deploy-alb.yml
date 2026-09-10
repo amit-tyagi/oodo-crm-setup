@@ -1,0 +1,38 @@
+name: Deploy ALB
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy ALB Stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy odoo-alb stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name odoo-alb \
+            --template-file aws/06-alb.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "VpcId=${{ vars.VPC_ID }}" \
+              "PublicSubnetIds=${{ vars.PUBLIC_SUBNET_IDS }}"
+
+      - name: Print stack outputs
+        run: |
+          echo "## ALB Stack Outputs" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name odoo-alb \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Application Load Balancer for Odoo CRM
+
+Parameters:
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Comma-separated public subnet IDs for the ALB
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID (same VPC used in security groups stack)
+
+Resources:
+  OdooAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: odoo-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !ImportValue OdooAlbSgId
+      Subnets: !Ref PublicSubnetIds
+      Tags:
+        - Key: Name
+          Value: odoo-alb
+
+  OdooTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: odoo-tg
+      Port: 8069
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /web/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '86400'
+      Tags:
+        - Key: Name
+          Value: odoo-tg
+
+  OdooAlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref OdooAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref OdooTargetGroup
+
+Outputs:
+  OdooAlbArn:
+    Value: !Ref OdooAlb
+    Export:
+      Name: OdooAlbArn
+
+  OdooAlbDnsName:
+    Value: !GetAtt OdooAlb.DNSName
+    Export:
+      Name: OdooAlbDnsName
+
+  OdooTargetGroupArn:
+    Value: !Ref OdooTargetGroup
+    Export:
+      Name: OdooTargetGroupArn

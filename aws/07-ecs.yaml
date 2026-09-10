@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Fargate cluster and service for Odoo CRM 18
+
+Parameters:
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Comma-separated private subnet IDs for ECS tasks
+
+  OdooDbHost:
+    Type: String
+    Description: Aurora PostgreSQL cluster endpoint (writer)
+
+  OdooDbCredentialsSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing Odoo DB credentials (odoo/db-credentials)
+
+  OdooDbName:
+    Type: String
+    Default: odoo_crm
+    Description: PostgreSQL database name for Odoo
+
+  OdooImage:
+    Type: String
+    Description: Full ECR image URI (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com/odoo-crm:18)
+
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048', '4096']
+
+  TaskMemory:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '4096', '8192']
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+
+Resources:
+  OdooEcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: odoo-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 4
+          Base: 0
+        - CapacityProvider: FARGATE
+          Weight: 1
+          Base: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: odoo-cluster
+
+  OdooLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/odoo-crm
+      RetentionInDays: 30
+
+  OdooTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: odoo-crm
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !ImportValue OdooTaskExecutionRoleArn
+      TaskRoleArn: !ImportValue OdooTaskRoleArn
+      Volumes:
+        - Name: odoo-filestore
+          EFSVolumeConfiguration:
+            FilesystemId: !ImportValue OdooEfsId
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !ImportValue OdooEfsAccessPointId
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: odoo
+          Image: !Ref OdooImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8069
+              Protocol: tcp
+          MountPoints:
+            - SourceVolume: odoo-filestore
+              ContainerPath: /var/lib/odoo
+              ReadOnly: false
+          Secrets:
+            - Name: PASSWORD
+              ValueFrom: !Sub '${OdooDbCredentialsSecretArn}:password::'
+            - Name: USER
+              ValueFrom: !Sub '${OdooDbCredentialsSecretArn}:username::'
+            - Name: ADMIN_PASSWD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn: !ImportValue OdooAdminSecretArn
+          Environment:
+            - Name: HOST
+              Value: !Ref OdooDbHost
+            - Name: PORT
+              Value: '5432'
+            - Name: DB
+              Value: !Ref OdooDbName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/odoo-crm
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: odoo
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - 'curl -f http://localhost:8069/web/health || exit 1'
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+
+  OdooEcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: odoo-service
+      Cluster: !Ref OdooEcsCluster
+      TaskDefinition: !Ref OdooTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !ImportValue OdooEcsSgId
+      LoadBalancers:
+        - ContainerName: odoo
+          ContainerPort: 8069
+          TargetGroupArn: !ImportValue OdooTargetGroupArn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 120
+      Tags:
+        - Key: Name
+          Value: odoo-service
+
+Outputs:
+  OdooClusterName:
+    Value: !Ref OdooEcsCluster
+    Export:
+      Name: OdooClusterName
+
+  OdooServiceName:
+    Value: !GetAtt OdooEcsService.Name
+    Export:
+      Name: OdooServiceName
+
+  OdooTaskDefinitionArn:
+    Value: !Ref OdooTaskDefinition
+    Export:
+      Name: OdooTaskDefinitionArn

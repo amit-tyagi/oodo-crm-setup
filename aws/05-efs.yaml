@@ -62,3 +62,8 @@ Outputs:
     Value: !GetAtt OdooEfsAccessPoint.Arn
     Export:
       Name: OdooEfsAccessPointArn
+
+  OdooEfsAccessPointId:
+    Value: !Ref OdooEfsAccessPoint
+    Export:
+      Name: OdooEfsAccessPointId

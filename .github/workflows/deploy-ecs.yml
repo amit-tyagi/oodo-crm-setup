@@ -1,0 +1,83 @@
+name: Deploy ECS
+
+on:
+  workflow_dispatch:
+    inputs:
+      desired_count:
+        description: 'Number of ECS tasks'
+        required: false
+        default: '1'
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy ECS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr-login
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGION=${{ secrets.AWS_REGION }}
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+          aws ecr get-login-password --region $REGION | \
+            docker login --username AWS --password-stdin $ECR_REGISTRY
+          echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        id: build-image
+        run: |
+          ECR_REGISTRY=${{ steps.ecr-login.outputs.ecr_registry }}
+          IMAGE_TAG=${{ github.sha }}
+          IMAGE_URI="${ECR_REGISTRY}/odoo-crm:${IMAGE_TAG}"
+
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+          # Also tag as latest
+          docker tag $IMAGE_URI "${ECR_REGISTRY}/odoo-crm:latest"
+          docker push "${ECR_REGISTRY}/odoo-crm:latest"
+
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built and pushed: $IMAGE_URI"
+
+      - name: Deploy odoo-ecs stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name odoo-ecs \
+            --template-file aws/07-ecs.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "PrivateSubnetIds=${{ vars.PRIVATE_SUBNET_IDS }}" \
+              "OdooDbHost=${{ vars.AURORA_WRITER_ENDPOINT }}" \
+              "OdooDbCredentialsSecretArn=${{ secrets.AURORA_SECRET_ARN }}" \
+              "OdooImage=${{ steps.build-image.outputs.image_uri }}" \
+              "DesiredCount=${{ github.event.inputs.desired_count }}"
+
+      - name: Print stack outputs
+        run: |
+          echo "## ECS Stack Outputs" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name odoo-ecs \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY
+
+      - name: Print Odoo URL
+        run: |
+          DNS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-alb \
+            --query 'Stacks[0].Outputs[?OutputKey==`OdooAlbDnsName`].OutputValue' \
+            --output text)
+          echo "## Odoo URL" >> $GITHUB_STEP_SUMMARY
+          echo "http://${DNS}" >> $GITHUB_STEP_SUMMARY
+          echo "Image deployed: ${{ steps.build-image.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
