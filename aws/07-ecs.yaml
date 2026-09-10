@@ -111,6 +111,8 @@ Resources:
               Value: '5432'
             - Name: DB
               Value: !Ref OdooDbName
+            - Name: INIT
+              Value: base
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -122,9 +124,9 @@ Resources:
               - CMD-SHELL
               - 'curl -f http://localhost:8069/web/health || exit 1'
             Interval: 30
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 120
+            Timeout: 10
+            Retries: 5
+            StartPeriod: 300
 
   OdooEcsService:
     Type: AWS::ECS::Service
@@ -150,7 +152,7 @@ Resources:
         DeploymentCircuitBreaker:
           Enable: true
           Rollback: true
-      HealthCheckGracePeriodSeconds: 120
+      HealthCheckGracePeriodSeconds: 300
       Tags:
         - Key: Name
           Value: odoo-service
