@@ -7,6 +7,14 @@ on:
         description: 'Number of ECS tasks'
         required: false
         default: '1'
+      task_cpu:
+        description: 'CPU units for ECS tasks'
+        required: false
+        default: '1024'
+      task_memory:
+        description: 'Memory (MiB) for ECS tasks'
+        required: false
+        default: '2048'
 
 jobs:
   deploy:
@@ -62,6 +70,8 @@ jobs:
               "OdooDbHost=${{ vars.AURORA_WRITER_ENDPOINT }}" \
               "OdooDbCredentialsSecretArn=${{ secrets.AURORA_SECRET_ARN }}" \
               "OdooImage=${{ steps.build-image.outputs.image_uri }}" \
+              "TaskCpu=${{ github.event.inputs.task_cpu }}" \
+              "TaskMemory=${{ github.event.inputs.task_memory }}" \
               "DesiredCount=${{ github.event.inputs.desired_count }}"
 
       - name: Print stack outputs
