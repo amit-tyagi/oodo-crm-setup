@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EFS file system for Odoo filestore persistence
+
+Parameters:
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Comma-separated private subnet IDs — one mount target created per subnet (supports up to 3 AZs)
+
+Resources:
+  OdooEfsFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: odoo-efs
+
+  OdooEfsMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref OdooEfsFileSystem
+      SubnetId: !Select [0, !Ref PrivateSubnetIds]
+      SecurityGroups:
+        - !ImportValue OdooEfsSgId
+
+  OdooEfsMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref OdooEfsFileSystem
+      SubnetId: !Select [1, !Ref PrivateSubnetIds]
+      SecurityGroups:
+        - !ImportValue OdooEfsSgId
+
+  OdooEfsAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref OdooEfsFileSystem
+      PosixUser:
+        Uid: '1000'
+        Gid: '1000'
+      RootDirectory:
+        Path: /odoo/filestore
+        CreationInfo:
+          OwnerUid: '1000'
+          OwnerGid: '1000'
+          Permissions: '755'
+      AccessPointTags:
+        - Key: Name
+          Value: odoo-efs-access-point
+
+Outputs:
+  OdooEfsId:
+    Value: !Ref OdooEfsFileSystem
+    Export:
+      Name: OdooEfsId
+
+  OdooEfsAccessPointArn:
+    Value: !GetAtt OdooEfsAccessPoint.Arn
+    Export:
+      Name: OdooEfsAccessPointArn
