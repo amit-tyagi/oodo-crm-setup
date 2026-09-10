@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Security groups for Odoo CRM
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: Existing VPC ID
+
+  ExistingAuroraSgId:
+    Type: String
+    Description: Security group ID of the existing Aurora cluster
+
+Resources:
+  OdooAlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-alb-sg
+      GroupDescription: ALB - allows HTTP port 80 from internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: odoo-alb-sg
+
+  OdooEcsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-ecs-sg
+      GroupDescription: ECS Fargate tasks - allows port 8069 from ALB SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8069
+          ToPort: 8069
+          SourceSecurityGroupId: !Ref OdooAlbSg
+      Tags:
+        - Key: Name
+          Value: odoo-ecs-sg
+
+  OdooEfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-efs-sg
+      GroupDescription: EFS mount targets - allows NFS port 2049 from ECS SG
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref OdooEcsSg
+      Tags:
+        - Key: Name
+          Value: odoo-efs-sg
+
+  AuroraIngressFromEcs:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ExistingAuroraSgId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref OdooEcsSg
+      Description: Allow Odoo ECS tasks to connect to Aurora PostgreSQL on port 5432
+
+Outputs:
+  OdooAlbSgId:
+    Value: !Ref OdooAlbSg
+    Export:
+      Name: OdooAlbSgId
+
+  OdooEcsSgId:
+    Value: !Ref OdooEcsSg
+    Export:
+      Name: OdooEcsSgId
+
+  OdooEfsSgId:
+    Value: !Ref OdooEfsSg
+    Export:
+      Name: OdooEfsSgId

@@ -1,0 +1,118 @@
+name: Infrastructure Plan
+
+on:
+  workflow_dispatch:
+
+jobs:
+  plan:
+    name: Preview Infrastructure Changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Plan 01-ecr
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name odoo-ecr \
+            --template-body file://aws/01-ecr.yaml \
+            --change-set-name plan-${{ github.run_id }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name odoo-ecr --query 'Stacks[0].StackStatus' 2>/dev/null && echo UPDATE || echo CREATE) || true
+
+          aws cloudformation wait change-set-create-complete \
+            --stack-name odoo-ecr \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+          echo "### 01-ecr" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-change-set \
+            --stack-name odoo-ecr \
+            --change-set-name plan-${{ github.run_id }} \
+            --query 'Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType}' \
+            --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No changes detected" >> $GITHUB_STEP_SUMMARY
+
+          aws cloudformation delete-change-set \
+            --stack-name odoo-ecr \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+      - name: Plan 02-iam
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name odoo-iam \
+            --template-body file://aws/02-iam.yaml \
+            --change-set-name plan-${{ github.run_id }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name odoo-iam --query 'Stacks[0].StackStatus' 2>/dev/null && echo UPDATE || echo CREATE) || true
+
+          aws cloudformation wait change-set-create-complete \
+            --stack-name odoo-iam \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+          echo "### 02-iam" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-change-set \
+            --stack-name odoo-iam \
+            --change-set-name plan-${{ github.run_id }} \
+            --query 'Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType}' \
+            --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No changes detected" >> $GITHUB_STEP_SUMMARY
+
+          aws cloudformation delete-change-set \
+            --stack-name odoo-iam \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+      - name: Plan 03-security-groups
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name odoo-security-groups \
+            --template-body file://aws/03-security-groups.yaml \
+            --change-set-name plan-${{ github.run_id }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name odoo-security-groups --query 'Stacks[0].StackStatus' 2>/dev/null && echo UPDATE || echo CREATE) \
+            --parameters \
+              ParameterKey=VpcId,ParameterValue=${{ vars.VPC_ID }} \
+              ParameterKey=ExistingAuroraSgId,ParameterValue=${{ vars.EXISTING_AURORA_SG_ID }} || true
+
+          aws cloudformation wait change-set-create-complete \
+            --stack-name odoo-security-groups \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+          echo "### 03-security-groups" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-change-set \
+            --stack-name odoo-security-groups \
+            --change-set-name plan-${{ github.run_id }} \
+            --query 'Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType}' \
+            --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No changes detected" >> $GITHUB_STEP_SUMMARY
+
+          aws cloudformation delete-change-set \
+            --stack-name odoo-security-groups \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+      - name: Plan 04-secrets
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name odoo-secrets \
+            --template-body file://aws/04-secrets.yaml \
+            --change-set-name plan-${{ github.run_id }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name odoo-secrets --query 'Stacks[0].StackStatus' 2>/dev/null && echo UPDATE || echo CREATE) || true
+
+          aws cloudformation wait change-set-create-complete \
+            --stack-name odoo-secrets \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true
+
+          echo "### 04-secrets" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-change-set \
+            --stack-name odoo-secrets \
+            --change-set-name plan-${{ github.run_id }} \
+            --query 'Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType}' \
+            --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No changes detected" >> $GITHUB_STEP_SUMMARY
+
+          aws cloudformation delete-change-set \
+            --stack-name odoo-secrets \
+            --change-set-name plan-${{ github.run_id }} 2>/dev/null || true

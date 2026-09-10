@@ -1,0 +1,76 @@
+name: Infrastructure Apply
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure Stacks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Wave 1: ECR and IAM are independent — deploy in parallel
+      - name: Deploy 01-ecr and 02-iam
+        run: |
+          aws cloudformation deploy \
+            --stack-name odoo-ecr \
+            --template-file aws/01-ecr.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset &
+          ECR_PID=$!
+
+          aws cloudformation deploy \
+            --stack-name odoo-iam \
+            --template-file aws/02-iam.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset &
+          IAM_PID=$!
+
+          wait $ECR_PID || { echo "::error::01-ecr deployment failed"; exit 1; }
+          wait $IAM_PID || { echo "::error::02-iam deployment failed"; exit 1; }
+          echo "Wave 1 complete: odoo-ecr and odoo-iam deployed"
+
+      # Wave 2: Security groups and secrets — deploy in parallel after wave 1
+      - name: Deploy 03-security-groups and 04-secrets
+        run: |
+          aws cloudformation deploy \
+            --stack-name odoo-security-groups \
+            --template-file aws/03-security-groups.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              VpcId=${{ vars.VPC_ID }} \
+              ExistingAuroraSgId=${{ vars.EXISTING_AURORA_SG_ID }} &
+          SG_PID=$!
+
+          aws cloudformation deploy \
+            --stack-name odoo-secrets \
+            --template-file aws/04-secrets.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset &
+          SECRETS_PID=$!
+
+          wait $SG_PID || { echo "::error::03-security-groups deployment failed"; exit 1; }
+          wait $SECRETS_PID || { echo "::error::04-secrets deployment failed"; exit 1; }
+          echo "Wave 2 complete: odoo-security-groups and odoo-secrets deployed"
+
+      - name: Print stack outputs
+        if: always()
+        run: |
+          echo "## Deployed Stack Outputs" >> $GITHUB_STEP_SUMMARY
+          for stack in odoo-ecr odoo-iam odoo-security-groups odoo-secrets; do
+            echo "### $stack" >> $GITHUB_STEP_SUMMARY
+            aws cloudformation describe-stacks \
+              --stack-name $stack \
+              --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+              --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Stack not found or no outputs" >> $GITHUB_STEP_SUMMARY
+          done
