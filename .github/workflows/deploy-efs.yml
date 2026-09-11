@@ -26,7 +26,7 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --parameter-overrides \
-              "PrivateSubnetIds=${{ vars.PRIVATE_SUBNET_IDS }}"
+              "SubnetIds=${{ vars.SUBNET_IDS }}"
 
       - name: Print stack outputs
         run: |

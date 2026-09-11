@@ -2,9 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: EFS file system for Odoo filestore persistence
 
 Parameters:
-  PrivateSubnetIds:
+  SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Comma-separated private subnet IDs — one mount target created per subnet (supports up to 3 AZs)
+    Description: Comma-separated subnet IDs — one EFS mount target created per subnet (all 4 AZs)
 
 Resources:
   OdooEfsFileSystem:
@@ -23,7 +23,7 @@ Resources:
     Type: AWS::EFS::MountTarget
     Properties:
       FileSystemId: !Ref OdooEfsFileSystem
-      SubnetId: !Select [0, !Ref PrivateSubnetIds]
+      SubnetId: !Select [0, !Ref SubnetIds]
       SecurityGroups:
         - !ImportValue OdooEfsSgId
 
@@ -31,7 +31,7 @@ Resources:
     Type: AWS::EFS::MountTarget
     Properties:
       FileSystemId: !Ref OdooEfsFileSystem
-      SubnetId: !Select [1, !Ref PrivateSubnetIds]
+      SubnetId: !Select [1, !Ref SubnetIds]
       SecurityGroups:
         - !ImportValue OdooEfsSgId
 

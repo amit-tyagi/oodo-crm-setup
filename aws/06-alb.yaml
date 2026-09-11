@@ -2,9 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Application Load Balancer for Odoo CRM
 
 Parameters:
-  PublicSubnetIds:
+  SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Comma-separated public subnet IDs for the ALB
+    Description: Comma-separated subnet IDs for the ALB
 
   VpcId:
     Type: AWS::EC2::VPC::Id
@@ -19,7 +19,7 @@ Resources:
       Type: application
       SecurityGroups:
         - !ImportValue OdooAlbSgId
-      Subnets: !Ref PublicSubnetIds
+      Subnets: !Ref SubnetIds
       Tags:
         - Key: Name
           Value: odoo-alb

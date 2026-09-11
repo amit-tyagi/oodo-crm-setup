@@ -2,9 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: ECS Fargate cluster and service for Odoo CRM 18
 
 Parameters:
-  PrivateSubnetIds:
+  SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Comma-separated private subnet IDs for ECS tasks
+    Description: Comma-separated subnet IDs for ECS tasks
 
   OdooDbHost:
     Type: String
@@ -137,7 +137,7 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
-          Subnets: !Ref PrivateSubnetIds
+          Subnets: !Ref SubnetIds
           SecurityGroups:
             - !ImportValue OdooEcsSgId
       LoadBalancers:

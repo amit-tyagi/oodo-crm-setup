@@ -27,7 +27,7 @@ jobs:
             --no-fail-on-empty-changeset \
             --parameter-overrides \
               "VpcId=${{ vars.VPC_ID }}" \
-              "PublicSubnetIds=${{ vars.PUBLIC_SUBNET_IDS }}"
+              "SubnetIds=${{ vars.SUBNET_IDS }}"
 
       - name: Print stack outputs
         run: |
