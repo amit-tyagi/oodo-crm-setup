@@ -124,7 +124,7 @@ Resources:
             Interval: 30
             Timeout: 10
             Retries: 5
-            StartPeriod: 600
+            StartPeriod: 300
 
   OdooEcsService:
     Type: AWS::ECS::Service
