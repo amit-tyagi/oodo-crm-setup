@@ -10,11 +10,11 @@ on:
       task_cpu:
         description: 'CPU units for ECS tasks'
         required: false
-        default: '1024'
+        default: '2048'
       task_memory:
         description: 'Memory (MiB) for ECS tasks'
         required: false
-        default: '2048'
+        default: '4096'
 
 jobs:
   deploy:
