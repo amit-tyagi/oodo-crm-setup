@@ -111,8 +111,6 @@ Resources:
               Value: '5432'
             - Name: DB
               Value: !Ref OdooDbName
-            - Name: INIT
-              Value: base
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -126,7 +124,7 @@ Resources:
             Interval: 30
             Timeout: 10
             Retries: 5
-            StartPeriod: 300
+            StartPeriod: 600
 
   OdooEcsService:
     Type: AWS::ECS::Service
@@ -152,7 +150,7 @@ Resources:
         DeploymentCircuitBreaker:
           Enable: true
           Rollback: true
-      HealthCheckGracePeriodSeconds: 300
+      HealthCheckGracePeriodSeconds: 600
       Tags:
         - Key: Name
           Value: odoo-service
