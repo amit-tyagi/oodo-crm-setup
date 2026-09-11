@@ -1,0 +1,105 @@
+name: Deploy Aurora RDS
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Project name (used for tagging and naming resources)'
+        required: true
+      cluster_name:
+        description: 'Aurora cluster name (DB cluster identifier)'
+        required: true
+      min_acu:
+        description: 'Minimum Aurora Capacity Units'
+        required: false
+        default: '1'
+      max_acu:
+        description: 'Maximum Aurora Capacity Units'
+        required: false
+        default: '4'
+      deletion_protection:
+        description: 'Enable deletion protection'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      enable_data_api:
+        description: 'Enable RDS Data API (HTTP endpoint)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      publicly_accessible:
+        description: 'Make DB instance publicly accessible'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  deploy:
+    name: Deploy Aurora RDS Stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Delete stack if in ROLLBACK_COMPLETE
+        env:
+          STACK_NAME: ${{ github.event.inputs.cluster_name }}-stack
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Stack is in ROLLBACK_COMPLETE — deleting before redeploy..."
+            aws cloudformation delete-stack --stack-name $STACK_NAME
+            aws cloudformation wait stack-delete-complete --stack-name $STACK_NAME
+            echo "Stack deleted."
+          else
+            echo "Stack status: $STATUS — no deletion needed."
+          fi
+
+      - name: Deploy Aurora RDS stack
+        env:
+          STACK_NAME: ${{ github.event.inputs.cluster_name }}-stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name $STACK_NAME \
+            --template-file aws/08-aurora-rds.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "ProjectName=${{ github.event.inputs.project_name }}" \
+              "ClusterName=${{ github.event.inputs.cluster_name }}" \
+              "VpcId=${{ vars.VPC_ID }}" \
+              "SubnetIds=${{ vars.SUBNET_IDS }}" \
+              "MinACU=${{ github.event.inputs.min_acu }}" \
+              "MaxACU=${{ github.event.inputs.max_acu }}" \
+              "DeletionProtection=${{ github.event.inputs.deletion_protection }}" \
+              "EnableDataApi=${{ github.event.inputs.enable_data_api }}" \
+              "PubliclyAccessible=${{ github.event.inputs.publicly_accessible }}"
+
+      - name: Print stack outputs
+        env:
+          STACK_NAME: ${{ github.event.inputs.cluster_name }}-stack
+        run: |
+          echo "## Aurora RDS Stack Outputs" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY

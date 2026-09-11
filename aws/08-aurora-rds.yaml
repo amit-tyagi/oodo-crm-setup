@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template creates a single writer instance in a Serverless v2 cluster, with a security group, subnet group,
+  and cluster parameter group. The master password is automatically managed by AWS Secrets Manager.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Description: Project name prepended to every resource identifier and used as the Project tag
+
+  ClusterName:
+    Type: String
+    Description: Name for the Aurora DB cluster (prepended with ProjectName)
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the Aurora cluster will be deployed
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two private subnet IDs in different AZs
+
+  MinACU:
+    Type: Number
+    Default: 1
+    Description: >
+      Minimum Aurora Capacity Units. 0.5 ACU ≈ 1 GB RAM.
+      Aurora Serverless v2 scales down to this floor when idle.
+    AllowedValues: [0.5, 1, 2, 4, 8, 16, 32, 64, 128, 192, 256]
+
+  MaxACU:
+    Type: Number
+    Default: 4
+    Description: Maximum Aurora Capacity Units. Set higher for prod to handle peak load.
+
+  DeletionProtection:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Prevent accidental cluster deletion. Set true for prod.
+
+  EnableDataApi:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: >
+      Enable the RDS Data API (HTTP endpoint). Allows running SQL over HTTPS without a
+      persistent connection — useful for Lambda and other serverless callers.
+      Requires StorageEncrypted=true (already enforced by this template).
+
+  PubliclyAccessible:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: >
+      Whether the DB instance is publicly accessible from the internet.
+      Set true only for dev/admin access (e.g. pgAdmin from a laptop).
+      Must also open port 5432 in the Aurora security group for your IP.
+      Always false for prod.
+
+Conditions:
+  DataApiEnabled: !Equals [!Ref EnableDataApi, 'true']
+
+Resources:
+
+  # ── Security Group ──────────────────────────────────────────────────────────
+  # No inbound rules here — other stacks (Glue, bastion) add their own ingress
+  # rules using the exported SG ID, keeping the stacks decoupled.
+  AuroraSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Aurora PostgreSQL - controlled inbound from DMS and app tier
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${ClusterName}-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── DB Subnet Group ─────────────────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Aurora PostgreSQL subnet group
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${ClusterName}-subnet-group
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── Cluster Parameter Group ─────────────────────────────────────────────────
+  ClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Aurora PostgreSQL 17 cluster parameters
+      Family: aurora-postgresql17
+      Parameters:
+        # Required if logical replication is used later (e.g. for further downstream consumers)
+        rds.logical_replication: '1'
+        # Load pg_stat_statements for query performance visibility
+        shared_preload_libraries: pg_stat_statements
+        # Log queries that run longer than 1 second
+        log_min_duration_statement: '1000'
+        # Timezone consistency
+        timezone: UTC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${ClusterName}-param-group
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── Aurora Serverless v2 Cluster ────────────────────────────────────────────
+  # EngineMode is intentionally omitted (defaults to 'provisioned').
+  # Serverless v2 uses provisioned mode + ServerlessV2ScalingConfiguration
+  # on the cluster + db.serverless instance class on each instance.
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBClusterIdentifier: !Sub ${ProjectName}-${ClusterName}
+      Engine: aurora-postgresql
+      EngineVersion: '17.4'
+      MasterUsername: postgres
+      # AWS creates and manages the master password in Secrets Manager automatically.
+      # Access the secret via the MasterUserSecret.SecretArn attribute output below.
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBClusterParameterGroupName: !Ref ClusterParameterGroup
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref MinACU
+        MaxCapacity: !Ref MaxACU
+      StorageEncrypted: true
+      EnableHttpEndpoint: !If [DataApiEnabled, true, false]
+      DeletionProtection: !Ref DeletionProtection
+      BackupRetentionPeriod: 1
+      # Ship PostgreSQL logs to CloudWatch Logs for slow-query and error visibility
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${ClusterName}
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # ── Single Instance ─────────────────────────────────────────────────────────
+  WriterInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-${ClusterName}-writer
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref AuroraCluster
+      PubliclyAccessible: !Ref PubliclyAccessible
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${ClusterName}-writer
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora writer endpoint hostname
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-endpoint
+
+  ClusterPort:
+    Description: Aurora port
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-port
+
+  ConnectionUrl:
+    Description: PostgreSQL connection URL. Retrieve the password from the secret at CredentialsSecretArn.
+    Value: !Sub
+      - "postgresql://postgres@${Host}:${Port}/postgres"
+      - Host: !GetAtt AuroraCluster.Endpoint.Address
+        Port: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-connection-url
+
+  CredentialsSecretArn:
+    Description: >
+      ARN of the AWS-managed Secrets Manager secret holding master credentials.
+      Format: {"username": "postgres", "password": "...", "host": "...", "port": 5432, "dbname": "..."}
+    Value: !GetAtt AuroraCluster.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-credentials-arn
+
+  AuroraSecurityGroupId:
+    Description: >
+      Aurora security group ID. Other stacks add their ingress rules here
+      using this export so the stacks remain decoupled.
+    Value: !Ref AuroraSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-sg-id
+
+  ClusterResourceId:
+    Description: Aurora cluster resource identifier — required for IAM database authentication
+    Value: !GetAtt AuroraCluster.DBClusterResourceId
+    Export:
+      Name: !Sub ${ProjectName}-${ClusterName}-resource-id
