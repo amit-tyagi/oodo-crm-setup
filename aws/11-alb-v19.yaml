@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Application Load Balancer for Odoo CRM v19.
+  Depends on odoo-sg-v19 stack for the ALB security group.
+
+Parameters:
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the ALB will be deployed
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two public subnet IDs across different AZs for the ALB
+
+Resources:
+
+  # ── Load Balancer ────────────────────────────────────────────────────────────
+  # Name odoo-alb-v19 produces DNS: odoo-alb-v19-<hash>.us-east-1.elb.amazonaws.com
+  OdooAlbV19:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: odoo-alb-v19
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !ImportValue OdooAlbSgIdV19
+      Subnets: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: odoo-alb-v19
+
+  # ── Target Group ─────────────────────────────────────────────────────────────
+  OdooTargetGroupV19:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: odoo-tg-v19
+      Port: 8069
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /web/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '86400'
+      Tags:
+        - Key: Name
+          Value: odoo-tg-v19
+
+  # ── Listener ─────────────────────────────────────────────────────────────────
+  OdooAlbListenerV19:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref OdooAlbV19
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref OdooTargetGroupV19
+
+Outputs:
+
+  OdooAlbDnsNameV19:
+    Value: !GetAtt OdooAlbV19.DNSName
+    Export:
+      Name: OdooAlbDnsNameV19
+
+  OdooTargetGroupArnV19:
+    Value: !Ref OdooTargetGroupV19
+    Export:
+      Name: OdooTargetGroupArnV19

@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Security groups for Odoo CRM v19 — fully isolated from v18 stacks.
+  Creates ALB SG, ECS task SG, EFS SG, and adds an ingress rule to the
+  existing Aurora cluster SG for v19 ECS tasks.
+
+Parameters:
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where security groups will be created
+
+  ExistingAuroraSgId:
+    Type: String
+    Description: >
+      Security group ID of the existing Aurora cluster.
+      An ingress rule allowing port 5432 from the v19 ECS task SG will be added.
+
+Resources:
+
+  # ── ALB Security Group ───────────────────────────────────────────────────────
+  OdooAlbSgV19:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-alb-sg-v19
+      GroupDescription: ALB v19 - HTTP port 80 from internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: odoo-alb-sg-v19
+
+  # ── ECS Task Security Group ──────────────────────────────────────────────────
+  OdooEcsSgV19:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-ecs-sg-v19
+      GroupDescription: ECS Fargate tasks v19 - port 8069 from ALB SG v19
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8069
+          ToPort: 8069
+          SourceSecurityGroupId: !Ref OdooAlbSgV19
+      Tags:
+        - Key: Name
+          Value: odoo-ecs-sg-v19
+
+  # ── EFS Security Group ───────────────────────────────────────────────────────
+  OdooEfsSgV19:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: odoo-efs-sg-v19
+      GroupDescription: EFS mount targets v19 - NFS port 2049 from ECS SG v19
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref OdooEcsSgV19
+      Tags:
+        - Key: Name
+          Value: odoo-efs-sg-v19
+
+  # ── Aurora Ingress Rule for v19 ECS Tasks ────────────────────────────────────
+  # Adds a rule to the existing Aurora SG — the cluster itself is not modified.
+  AuroraIngressFromEcsV19:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ExistingAuroraSgId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref OdooEcsSgV19
+      Description: Allow Odoo v19 ECS tasks to connect to Aurora PostgreSQL on port 5432
+
+Outputs:
+
+  OdooAlbSgIdV19:
+    Value: !Ref OdooAlbSgV19
+    Export:
+      Name: OdooAlbSgIdV19
+
+  OdooEcsSgIdV19:
+    Value: !Ref OdooEcsSgV19
+    Export:
+      Name: OdooEcsSgIdV19
+
+  OdooEfsSgIdV19:
+    Value: !Ref OdooEfsSgV19
+    Export:
+      Name: OdooEfsSgIdV19
