@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EFS file system for Odoo CRM v19.
+  Depends on odoo-sg-v19 stack for EFS and ECS security groups.
+
+Parameters:
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two subnet IDs — one EFS mount target is created per subnet
+
+Resources:
+
+  # ── EFS File System ──────────────────────────────────────────────────────────
+  OdooEfsV19:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: odoo-efs-v19
+
+  OdooEfsMountTarget1V19:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref OdooEfsV19
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroups:
+        - !ImportValue OdooEfsSgIdV19
+
+  OdooEfsMountTarget2V19:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref OdooEfsV19
+      SubnetId: !Select [1, !Ref SubnetIds]
+      SecurityGroups:
+        - !ImportValue OdooEfsSgIdV19
+
+  # ── EFS Access Point ─────────────────────────────────────────────────────────
+  OdooEfsAccessPointV19:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref OdooEfsV19
+      PosixUser:
+        Uid: '1000'
+        Gid: '1000'
+      RootDirectory:
+        Path: /odoo/filestore
+        CreationInfo:
+          OwnerUid: '1000'
+          OwnerGid: '1000'
+          Permissions: '755'
+      AccessPointTags:
+        - Key: Name
+          Value: odoo-efs-access-point-v19
+
+Outputs:
+
+  OdooEfsIdV19:
+    Value: !Ref OdooEfsV19
+    Export:
+      Name: OdooEfsIdV19
+
+  OdooEfsAccessPointIdV19:
+    Value: !Ref OdooEfsAccessPointV19
+    Export:
+      Name: OdooEfsAccessPointIdV19
+
+  OdooEfsAccessPointArnV19:
+    Value: !GetAtt OdooEfsAccessPointV19.Arn
+    Export:
+      Name: OdooEfsAccessPointArnV19

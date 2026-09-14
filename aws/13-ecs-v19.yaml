@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECS Fargate cluster and service for Odoo CRM v19.
+  Depends on odoo-alb-v19 and odoo-efs-v19 stacks.
+  Reuses existing IAM roles and admin secret from the v18 stacks.
+
+Parameters:
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for ECS tasks (same subnets as v18 service)
+
+  OdooDbHost:
+    Type: String
+    Description: Aurora PostgreSQL cluster writer endpoint (reused from existing Aurora stack)
+
+  OdooDbCredentialsSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing Odoo DB credentials (odoo/db-credentials)
+
+  OdooDbName:
+    Type: String
+    Default: odoo_crm
+    Description: PostgreSQL database name — Odoo creates this via the Database Manager on first boot
+
+  OdooImage:
+    Type: String
+    Description: Full ECR image URI for Odoo v19 (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com/odoo-crm-v19:sha)
+
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048', '4096']
+
+  TaskMemory:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '4096', '8192']
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+
+Resources:
+
+  # ── ECS Cluster ──────────────────────────────────────────────────────────────
+  OdooEcsClusterV19:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: odoo-cluster-v19
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 4
+          Base: 0
+        - CapacityProvider: FARGATE
+          Weight: 1
+          Base: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: odoo-cluster-v19
+
+  # ── CloudWatch Log Group ─────────────────────────────────────────────────────
+  OdooLogGroupV19:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/odoo-crm-v19
+      RetentionInDays: 30
+
+  # ── Task Definition ──────────────────────────────────────────────────────────
+  # Reuses IAM execution/task roles and admin secret from the v18 stack.
+  OdooTaskDefinitionV19:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: odoo-crm-v19
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !ImportValue OdooTaskExecutionRoleArn
+      TaskRoleArn: !ImportValue OdooTaskRoleArn
+      Volumes:
+        - Name: odoo-filestore
+          EFSVolumeConfiguration:
+            FilesystemId: !ImportValue OdooEfsIdV19
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId: !ImportValue OdooEfsAccessPointIdV19
+              IAM: ENABLED
+      ContainerDefinitions:
+        - Name: odoo
+          Image: !Ref OdooImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8069
+              Protocol: tcp
+          MountPoints:
+            - SourceVolume: odoo-filestore
+              ContainerPath: /var/lib/odoo
+              ReadOnly: false
+          Secrets:
+            - Name: PASSWORD
+              ValueFrom: !Sub '${OdooDbCredentialsSecretArn}:password::'
+            - Name: USER
+              ValueFrom: !Sub '${OdooDbCredentialsSecretArn}:username::'
+            - Name: ADMIN_PASSWD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - SecretArn: !ImportValue OdooAdminSecretArn
+          Environment:
+            - Name: HOST
+              Value: !Ref OdooDbHost
+            - Name: PORT
+              Value: '5432'
+            - Name: DB
+              Value: !Ref OdooDbName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/odoo-crm-v19
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: odoo
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - 'curl -f http://localhost:8069/web/health || exit 1'
+            Interval: 30
+            Timeout: 10
+            Retries: 5
+            StartPeriod: 300
+
+  # ── ECS Service ──────────────────────────────────────────────────────────────
+  OdooEcsServiceV19:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: odoo-service-v19
+      Cluster: !Ref OdooEcsClusterV19
+      TaskDefinition: !Ref OdooTaskDefinitionV19
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !ImportValue OdooEcsSgIdV19
+      LoadBalancers:
+        - ContainerName: odoo
+          ContainerPort: 8069
+          TargetGroupArn: !ImportValue OdooTargetGroupArnV19
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 600
+      Tags:
+        - Key: Name
+          Value: odoo-service-v19
+
+Outputs:
+
+  OdooClusterNameV19:
+    Value: !Ref OdooEcsClusterV19
+    Export:
+      Name: OdooClusterNameV19
+
+  OdooServiceNameV19:
+    Value: !GetAtt OdooEcsServiceV19.Name
+    Export:
+      Name: OdooServiceNameV19
+
+  OdooTaskDefinitionArnV19:
+    Value: !Ref OdooTaskDefinitionV19
+    Export:
+      Name: OdooTaskDefinitionArnV19

@@ -1,0 +1,192 @@
+name: Deploy Odoo v19 (New Stack)
+
+on:
+  workflow_dispatch:
+    inputs:
+      desired_count:
+        description: 'Number of ECS tasks'
+        required: false
+        default: '1'
+      task_cpu:
+        description: 'CPU units for ECS tasks'
+        required: false
+        default: '1024'
+      task_memory:
+        description: 'Memory (MiB) for ECS tasks'
+        required: false
+        default: '2048'
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy Odoo v19
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ── Step 1: ECR repository ──────────────────────────────────────────────
+      - name: Deploy ECR stack (odoo-ecr-v19)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-ecr-v19 \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name odoo-ecr-v19
+            aws cloudformation wait stack-delete-complete --stack-name odoo-ecr-v19
+          fi
+          aws cloudformation deploy \
+            --stack-name odoo-ecr-v19 \
+            --template-file aws/09-ecr-v19.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      # ── Step 2: Build and push Odoo v19 image ──────────────────────────────
+      - name: Log in to ECR
+        id: ecr-login
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REGION=${{ secrets.AWS_REGION }}
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+          aws ecr get-login-password --region $REGION | \
+            docker login --username AWS --password-stdin $ECR_REGISTRY
+          echo "ecr_registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+
+      - name: Build and push Odoo v19 Docker image
+        id: build-image
+        run: |
+          ECR_REGISTRY=${{ steps.ecr-login.outputs.ecr_registry }}
+          IMAGE_TAG=${{ github.sha }}
+          IMAGE_URI="${ECR_REGISTRY}/odoo-crm-v19:${IMAGE_TAG}"
+
+          docker build -f Dockerfile.v19 -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+          docker tag $IMAGE_URI "${ECR_REGISTRY}/odoo-crm-v19:latest"
+          docker push "${ECR_REGISTRY}/odoo-crm-v19:latest"
+
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built and pushed: $IMAGE_URI"
+
+      # ── Step 3: Security Groups ─────────────────────────────────────────────
+      - name: Deploy Security Groups stack (odoo-sg-v19)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-sg-v19 \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name odoo-sg-v19
+            aws cloudformation wait stack-delete-complete --stack-name odoo-sg-v19
+          fi
+          aws cloudformation deploy \
+            --stack-name odoo-sg-v19 \
+            --template-file aws/10-security-groups-v19.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "VpcId=${{ vars.VPC_ID }}" \
+              "ExistingAuroraSgId=${{ vars.AURORA_SG_ID }}"
+
+      # ── Step 4: ALB ─────────────────────────────────────────────────────────
+      - name: Deploy ALB stack (odoo-alb-v19)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-alb-v19 \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name odoo-alb-v19
+            aws cloudformation wait stack-delete-complete --stack-name odoo-alb-v19
+          fi
+          aws cloudformation deploy \
+            --stack-name odoo-alb-v19 \
+            --template-file aws/11-alb-v19.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "VpcId=${{ vars.VPC_ID }}" \
+              "SubnetIds=${{ vars.SUBNET_IDS }}"
+
+      # ── Step 5: EFS ─────────────────────────────────────────────────────────
+      - name: Deploy EFS stack (odoo-efs-v19)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-efs-v19 \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name odoo-efs-v19
+            aws cloudformation wait stack-delete-complete --stack-name odoo-efs-v19
+          fi
+          aws cloudformation deploy \
+            --stack-name odoo-efs-v19 \
+            --template-file aws/12-efs-v19.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "SubnetIds=${{ vars.SUBNET_IDS }}"
+
+      # ── Step 6: ECS cluster + service ──────────────────────────────────────
+      - name: Deploy ECS stack (odoo-ecs-v19)
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-ecs-v19 \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+            aws cloudformation delete-stack --stack-name odoo-ecs-v19
+            aws cloudformation wait stack-delete-complete --stack-name odoo-ecs-v19
+          fi
+          aws cloudformation deploy \
+            --stack-name odoo-ecs-v19 \
+            --template-file aws/13-ecs-v19.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "SubnetIds=${{ vars.SUBNET_IDS }}" \
+              "OdooDbHost=${{ vars.AURORA_WRITER_ENDPOINT }}" \
+              "OdooDbCredentialsSecretArn=${{ secrets.AURORA_SECRET_ARN }}" \
+              "OdooImage=${{ steps.build-image.outputs.image_uri }}" \
+              "TaskCpu=${{ github.event.inputs.task_cpu }}" \
+              "TaskMemory=${{ github.event.inputs.task_memory }}" \
+              "DesiredCount=${{ github.event.inputs.desired_count }}"
+
+      # ── Summary ─────────────────────────────────────────────────────────────
+      - name: Print stack outputs and Odoo v19 URL
+        run: |
+          echo "## Odoo v19 Stack Outputs" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Security Groups" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name odoo-sg-v19 \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY
+
+          echo "### ALB" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name odoo-alb-v19 \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY
+
+          echo "### ECS" >> $GITHUB_STEP_SUMMARY
+          aws cloudformation describe-stacks \
+            --stack-name odoo-ecs-v19 \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue}' \
+            --output table >> $GITHUB_STEP_SUMMARY
+
+          ALB_DNS=$(aws cloudformation describe-stacks \
+            --stack-name odoo-alb-v19 \
+            --query 'Stacks[0].Outputs[?OutputKey==`OdooAlbDnsNameV19`].OutputValue' \
+            --output text)
+          echo "## Odoo v19 URL" >> $GITHUB_STEP_SUMMARY
+          echo "http://${ALB_DNS}" >> $GITHUB_STEP_SUMMARY
+          echo "Image deployed: ${{ steps.build-image.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
